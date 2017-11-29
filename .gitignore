@@ -5,6 +5,10 @@ otp_dec_d
 otp_dec
 keygen
 
+# Model
+client.c
+server.c
+
 # Crap
 *.i
 

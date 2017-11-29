@@ -51,7 +51,7 @@ int main(int argc, char** argv)
     {
         buf[i] = random_char();
     }
-    buf[i] = '\n';
+    buf[i]     = '\n';
     buf[i + 1] = '\0';
 
     // Write the key to `stdout`

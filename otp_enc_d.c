@@ -141,6 +141,8 @@ int main(int argc, char** argv)
                         "%s: ERROR reading from socket.\n",
                         argv[0]
                     );
+                    free(key);
+                    free(plaintext);
                     close(est_conn_fd);
                     return 1;
                 }
@@ -197,6 +199,8 @@ int main(int argc, char** argv)
                         "%s: ERROR reading from socket.\n",
                         argv[0]
                     );
+                    free(key);
+                    free(plaintext);
                     close(est_conn_fd);
                     return 1;
                 }
@@ -230,6 +234,7 @@ int main(int argc, char** argv)
                 }
             }
 
+            // Check to make sure we have enough key
             if (key_len < plaintext_len)
             {
                 fprintf(
@@ -237,11 +242,40 @@ int main(int argc, char** argv)
                     "%s: ERROR; key is shorter than plain text portion.\n",
                     argv[0]
                 );
+                free(key);
+                free(plaintext);
                 close(est_conn_fd);
                 return 1;
             }
 
+            // Do the encoding, overwriting the `plaintext` buffer
+            encode(plaintext, plaintext_len, key);
+
+            // Send back the encoded message
+            int total_sent = 0;
+            while (total_sent < plaintext_len)
+            {
+                int chars_sent = send(
+                    est_conn_fd,
+                    &plaintext[total_sent],
+                    plaintext_len - total_sent,
+                    0
+                );
+                if (chars_sent < 0)
+                {
+                    perror("ERROR writing to socket");
+                    free(key);
+                    free(plaintext);
+                    close(est_conn_fd);
+                    return 1;
+                }
+
+                total_sent += chars_sent;
+            }
+
             // Child cleanup
+            free(key);
+            free(plaintext);
             close(est_conn_fd);
 
             return 0;

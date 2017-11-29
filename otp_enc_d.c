@@ -9,15 +9,26 @@
 #include <unistd.h>     // fork
 
 
-int encode(char* plaintext, int text_len, const char* key)
+char char_of_val(int val)
+{
+    return val == 26 ? ' ' : 'A' + val;
+}
+
+int val_of_char(char c)
+{
+    return c == ' ' ? 26 : c - 65;
+}
+
+void encode(char* plaintext, int text_len, const char* key)
 {
     int i;
     for (i = 0; i < text_len; ++i)
     {
+        int text_val = val_of_char(plaintext[i]);
+        int key_val  = val_of_char(key[i]);
 
+        plaintext[i] = char_of_val((text_val + key_val) % 27);
     }
-
-    return 0;
 }
 
 int main(int argc, char** argv)
@@ -92,6 +103,8 @@ int main(int argc, char** argv)
         if (spawned_pid == -1)
         {
             perror("fork() failed!");
+            close(socket_fd);
+            close(est_conn_fd);
             return 1;
         }
         else if (spawned_pid == 0) // In the child process
@@ -128,6 +141,7 @@ int main(int argc, char** argv)
                         "%s: ERROR reading from socket.\n",
                         argv[0]
                     );
+                    close(est_conn_fd);
                     return 1;
                 }
 
@@ -183,6 +197,7 @@ int main(int argc, char** argv)
                         "%s: ERROR reading from socket.\n",
                         argv[0]
                     );
+                    close(est_conn_fd);
                     return 1;
                 }
 
@@ -215,9 +230,26 @@ int main(int argc, char** argv)
                 }
             }
 
+            if (key_len < plaintext_len)
+            {
+                fprintf(
+                    stderr,
+                    "%s: ERROR; key is shorter than plain text portion.\n",
+                    argv[0]
+                );
+                close(est_conn_fd);
+                return 1;
+            }
+
+            // Child cleanup
+            close(est_conn_fd);
+
             return 0;
         }
     }
+
+    // Cleanup
+    close(socket_fd);
 
     return 0;
 }

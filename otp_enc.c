@@ -44,24 +44,9 @@ int send_contents(FILE* fh, int socket_fd)
         }
 
         // Send the chunk
-        int total_written = 0;
-        while (total_written < i)
+        if (send_msg(socket_fd, file_buf, i) < 0)
         {
-            fprintf(stderr, "client: total_written == %d\n", total_written);
-            int chars_written = send(
-                socket_fd,
-                &file_buf[total_written],
-                i - total_written,
-                0
-            );
-            if (chars_written < 0)
-            {
-                perror("otp_enc ERROR writing to socket");
-                return 1;
-            }
-            fprintf(stderr, "client sent\n");
-
-            total_written += chars_written;
+            return 1;
         }
     }
 
@@ -131,6 +116,31 @@ int handle_args(int    argc,
     return 0;
 }
 
+int send_msg(int conn_fd, const char* msg, int msg_len)
+{
+    int total_written = 0;
+    while (total_written < msg_len)
+    {
+        //fprintf(stderr, "client: total_written == %d\n", total_written);
+        int chars_written = send(
+            conn_fd,
+            &msg[total_written],
+            msg_len - total_written,
+            0
+        );
+        if (chars_written < 0)
+        {
+            perror("otp_enc ERROR writing to socket");
+            return -1;
+        }
+        //fprintf(stderr, "client sent\n");
+
+        total_written += chars_written;
+    }
+
+    return 0;
+}
+
 int main(int argc, char** argv)
 {
     // Handle the arguments passed into the program
@@ -152,6 +162,8 @@ int main(int argc, char** argv)
     if (server_host_info == NULL)
     {
         fprintf(stderr, "otp_enc ERROR: no such host %s\n", HOST_NAME);
+        fclose(key);
+        fclose(plaintext);
         return 1;
     }
     memcpy(
@@ -165,6 +177,8 @@ int main(int argc, char** argv)
     if (socket_fd < 0)
     {
         perror("otp_enc ERROR opening socket");
+        fclose(key);
+        fclose(plaintext);
         return 1;
     }
 
@@ -179,10 +193,41 @@ int main(int argc, char** argv)
         ) < 0
     ) {
         perror("otp_enc ERROR connecting to otp_enc_d");
+        fclose(key);
+        fclose(plaintext);
         return 2;
     }
 
     fprintf(stderr, "client connected socket\n");
+
+    // Send handshake
+    if (send_msg(socket_fd, MAGIC_HANDSHAKE, strlen(MAGIC_HANDSHAKE)) < 0)
+    {
+        close(socket_fd);
+        fclose(key);
+        fclose(plaintext);
+        return 1;
+    }
+
+    // Look for acknowledgement
+    char recv_buf[FILE_CHUNK_SIZE] = {0};
+    int ack_len = recv(socket_fd, recv_buf, sizeof(recv_buf) - 1, 0);
+    if (ack_len < 0)
+    {
+        perror("otp_enc ERROR receiving acknowledgement");
+        close(socket_fd);
+        fclose(key);
+        fclose(plaintext);
+        return 1;
+    }
+    if (recv_buf[0] != ACK_CHAR)
+    {
+        fprintf(stderr, "otp_enc ERROR: rejected by server!\n");
+        close(socket_fd);
+        fclose(key);
+        fclose(plaintext);
+        return 1;
+    }
 
     // Read "chunks" of the `plaintext` file, sending each one sequentially
     // after checking that all the characters are valid
@@ -207,7 +252,6 @@ int main(int argc, char** argv)
     fprintf(stderr, "client is done sending\n");
 
     // Slorp up the data we get back and output directly to `stdout`
-    char recv_buf[FILE_CHUNK_SIZE];
     int chars_recved;
     do
     {

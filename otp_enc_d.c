@@ -180,6 +180,8 @@ int handshake(int conn_fd)
         return send_res;
     }
 
+    fprintf(stderr, "hot damn\n");
+
     return 0;
 }
 

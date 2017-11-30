@@ -1,3 +1,4 @@
+// Macro constants
 #define RECV_CHUNK_SIZE 100
 #define MAX_CONNECTIONS 5
 #define MAGIC_HANDSHAKE "encode!"

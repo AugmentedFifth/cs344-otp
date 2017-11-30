@@ -1,8 +1,11 @@
 #include <stdio.h> // FILE
 
 
+// Macro constants
 #define FILE_CHUNK_SIZE 100
 #define HOST_NAME "localhost"
+#define MAGIC_HANDSHAKE "encode!"
+#define ACK_CHAR '.'
 
 
 // Forward declarations
@@ -13,3 +16,5 @@ int handle_args(int    argc,
                 int*   port_num_,
                 FILE** plaintext_,
                 FILE** key_);
+
+int send_msg(int conn_fd, const char* msg, int msg_len);

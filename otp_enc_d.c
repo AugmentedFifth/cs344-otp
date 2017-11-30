@@ -244,7 +244,7 @@ int main(int argc, char** argv)
                 );
                 if (chars_sent < 0)
                 {
-                    perror("ERROR writing to socket");
+                    perror("otp_enc_d ERROR writing to socket");
                     free(key);
                     free(plaintext);
                     close(est_conn_fd);
@@ -259,7 +259,7 @@ int main(int argc, char** argv)
             free(plaintext);
             if (shutdown(est_conn_fd, SHUT_RDWR) < 0)
             {
-                perror("ERROR shutting down socket connection");
+                perror("otp_enc_d ERROR shutting down socket connection");
                 close(est_conn_fd);
                 return 1;
             }
@@ -270,6 +270,12 @@ int main(int argc, char** argv)
     }
 
     // Cleanup
+    if (shutdown(socket_fd, SHUT_RDWR) < 0)
+    {
+        perror("otp_enc_d ERROR shutting down main socket connection");
+        close(socket_fd);
+        return 1;
+    }
     close(socket_fd);
 
     return 0;

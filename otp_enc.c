@@ -169,7 +169,7 @@ int main(int argc, char** argv)
 
     // Read "chunks" of the `plaintext` file, sending each one sequentially
     // after checking that all the characters are valid
-    int send_res = send_contents(argv[0], plaintext, socket_fd);
+    int send_res = send_contents(plaintext, socket_fd);
     if (send_res != 0)
     {
         close(socket_fd);
@@ -178,7 +178,7 @@ int main(int argc, char** argv)
         return send_res;
     }
     // Do the same for `key`
-    send_res = send_contents(argv[0], key, socket_fd);
+    send_res = send_contents(key, socket_fd);
     if (send_res != 0)
     {
         close(socket_fd);
@@ -225,7 +225,7 @@ int main(int argc, char** argv)
     fclose(plaintext);
     if (shutdown(socket_fd, SHUT_RDWR) < 0)
     {
-        perror("ERROR shutting down socket connection");
+        perror("otp_enc ERROR shutting down socket connection");
         close(socket_fd);
         return 1;
     }

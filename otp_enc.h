@@ -6,7 +6,7 @@
 
 
 // Forward declarations
-int send_contents(char* argv0, FILE* fh, int socket_fd);
+int send_contents(FILE* fh, int socket_fd);
 
 int handle_args(int    argc,
                 char** argv,

@@ -42,7 +42,7 @@ int main(int argc, char** argv)
     int listening_port = atoi(argv[1]);
     if (listening_port < 1)
     {
-        fprintf(stderr, "listening_port must be a positive integer.\n");
+        fprintf(stderr, "listening_port must be a positive integer\n");
         return 1;
     }
 
@@ -56,12 +56,7 @@ int main(int argc, char** argv)
     int socket_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (socket_fd < 0)
     {
-        fprintf(
-            stderr,
-            "%s: ERROR opening socket on port %d.\n",
-            argv[0],
-            listening_port
-        );
+        perror("otp_enc_d ERROR opening socket");
         return 1;
     }
 
@@ -73,12 +68,7 @@ int main(int argc, char** argv)
             sizeof(server_addr)
         ) < 0
     ) {
-        fprintf(
-            stderr,
-            "%s: ERROR on binding socket to port %d.\n",
-            argv[0],
-            listening_port
-        );
+        perror("otp_enc_d ERROR on binding socket");
         return 1;
     }
     listen(socket_fd, 5);
@@ -95,7 +85,7 @@ int main(int argc, char** argv)
         );
         if (est_conn_fd < 0)
         {
-            fprintf(stderr, "%s: ERROR on accept.\n", argv[0]);
+            perror("otp_enc_d ERROR on accept");
             return 1;
         }
 
@@ -136,11 +126,7 @@ int main(int argc, char** argv)
                 );
                 if (chars_recved < 0)
                 {
-                    fprintf(
-                        stderr,
-                        "%s: ERROR reading from socket.\n",
-                        argv[0]
-                    );
+                    perror("otp_enc_d ERROR reading from socket");
                     free(key);
                     free(plaintext);
                     close(est_conn_fd);
@@ -194,11 +180,7 @@ int main(int argc, char** argv)
                 );
                 if (chars_recved < 0)
                 {
-                    fprintf(
-                        stderr,
-                        "%s: ERROR reading from socket.\n",
-                        argv[0]
-                    );
+                    perror("otp_enc_d ERROR reading from socket");
                     free(key);
                     free(plaintext);
                     close(est_conn_fd);
@@ -239,8 +221,7 @@ int main(int argc, char** argv)
             {
                 fprintf(
                     stderr,
-                    "%s: ERROR; key is shorter than plain text portion.\n",
-                    argv[0]
+                    "otp_enc_d ERROR: key is shorter than plain text portion\n"
                 );
                 free(key);
                 free(plaintext);
@@ -276,6 +257,12 @@ int main(int argc, char** argv)
             // Child cleanup
             free(key);
             free(plaintext);
+            if (shutdown(est_conn_fd, SHUT_RDWR) < 0)
+            {
+                perror("ERROR shutting down socket connection");
+                close(est_conn_fd);
+                return 1;
+            }
             close(est_conn_fd);
 
             return 0;

@@ -2,6 +2,7 @@
 
 
 #define FILE_CHUNK_SIZE 100
+#define HOST_NAME "localhost"
 
 
 // Forward declarations

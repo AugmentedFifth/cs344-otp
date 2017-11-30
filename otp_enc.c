@@ -10,7 +10,7 @@
 #include <unistd.h>     // close
 
 
-int send_contents(char* argv0, FILE* fh, int socket_fd)
+int send_contents(FILE* fh, int socket_fd)
 {
     char file_buf[FILE_CHUNK_SIZE];
     while (fgets(file_buf, FILE_CHUNK_SIZE, fh) != NULL)
@@ -28,8 +28,7 @@ int send_contents(char* argv0, FILE* fh, int socket_fd)
             {
                 fprintf(
                     stderr,
-                    "%s: ERROR; unrecognized character '%c'.\n",
-                    argv0,
+                    "otp_enc ERROR: unrecognized character '%c'\n",
                     file_buf[i]
                 );
                 return 1;
@@ -50,7 +49,7 @@ int send_contents(char* argv0, FILE* fh, int socket_fd)
             );
             if (chars_written < 0)
             {
-                fprintf(stderr, "%s: ERROR writing to socket.\n", argv0);
+                perror("otp_enc ERROR writing to socket");
                 return 1;
             }
 
@@ -77,7 +76,7 @@ int handle_args(int    argc,
     int port_num = atoi(argv[3]);
     if (port_num < 1)
     {
-        fprintf(stderr, "port must be a positive integer.\n");
+        fprintf(stderr, "port must be a positive integer\n");
         return 1;
     }
 
@@ -86,31 +85,34 @@ int handle_args(int    argc,
     FILE* plaintext = fopen(argv[1], "r");
     if (plaintext == NULL)
     {
-        perror("Could not open plaintext file for reading");
+        perror("otp_enc ERROR opening plaintext file for reading");
         return 1;
     }
     FILE* key = fopen(argv[2], "r");
     if (key == NULL)
     {
-        perror("Could not open key file for reading");
+        perror("otp_enc ERROR opening key file for reading");
         return 1;
     }
 
     struct stat stat_buf;
     if (fstat(fileno(plaintext), &stat_buf) < 0)
     {
-        perror("Could not stat plaintext file");
+        perror("otp_enc ERROR stating plaintext file");
         return 1;
     }
     off_t plaintext_size = stat_buf.st_size;
     if (fstat(fileno(key), &stat_buf) < 0)
     {
-        perror("Could not stat key file");
+        perror("otp_enc ERROR stating key file");
         return 1;
     }
     if (stat_buf.st_size < plaintext_size)
     {
-        fprintf(stderr, "The key must be at least as long as the message.\n");
+        fprintf(
+            stderr,
+            "otp_enc ERROR: the key must be at least as long as the message\n"
+        );
         return 1;
     }
 
@@ -131,12 +133,12 @@ int main(int argc, char** argv)
     // Clear and fill the server address struct
     struct sockaddr_in server_addr = {0};
     server_addr.sin_family = AF_INET;
-    server_addr.sin_port   = htons(port_num);
+    server_addr.sin_port = htons(port_num);
     // Hardcoding "localhost" since it's not specified as an argument
-    struct hostent* server_host_info = gethostbyname("localhost");
+    struct hostent* server_host_info = gethostbyname(HOST_NAME);
     if (server_host_info == NULL)
     {
-        fprintf(stderr, "%s: ERROR, no such host %s.\n", argv[0], "localhost");
+        fprintf(stderr, "otp_enc ERROR: no such host %s\n", HOST_NAME);
         return 1;
     }
     memcpy(
@@ -149,7 +151,7 @@ int main(int argc, char** argv)
     int socket_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (socket_fd < 0)
     {
-        fprintf(stderr, "%s: ERROR opening socket.\n", argv[0]);
+        perror("otp_enc ERROR opening socket");
         return 1;
     }
 
@@ -161,12 +163,7 @@ int main(int argc, char** argv)
             sizeof(server_addr)
         ) < 0
     ) {
-        fprintf(
-            stderr,
-            "%s: ERROR connecting on port %d.\n",
-            argv[0],
-            port_num
-        );
+        perror("otp_enc ERROR connecting to otp_enc_d");
         return 2;
     }
 
@@ -200,7 +197,7 @@ int main(int argc, char** argv)
         chars_recved = recv(socket_fd, recv_buf, sizeof(recv_buf) - 1, 0);
         if (chars_recved < 0)
         {
-            fprintf(stderr, "%s: ERROR reading from socket.\n", argv[0]);
+            perror("otp_enc ERROR reading from socket");
             close(socket_fd);
             fclose(key);
             fclose(plaintext);
@@ -224,9 +221,15 @@ int main(int argc, char** argv)
     } while (1);
 
     // Cleanup
-    close(socket_fd);
     fclose(key);
     fclose(plaintext);
+    if (shutdown(socket_fd, SHUT_RDWR) < 0)
+    {
+        perror("ERROR shutting down socket connection");
+        close(socket_fd);
+        return 1;
+    }
+    close(socket_fd);
 
     return 0;
 }

@@ -12,12 +12,12 @@
 
 int send_contents(FILE* fh, int socket_fd)
 {
-    fprintf(stderr, "client sending contents\n");
+    //fprintf(stderr, "client sending contents\n");
 
     char file_buf[FILE_CHUNK_SIZE];
     while (fgets(file_buf, FILE_CHUNK_SIZE, fh) != NULL)
     {
-        fprintf(stderr, "client: fgets(file_buf, FILE_CHUNK_SIZE, fh) != NULL\n");
+        //fprintf(stderr, "client: fgets(file_buf, FILE_CHUNK_SIZE, fh) != NULL\n");
         // Check that this chunk of the file is ready to be sent
         int i = 0;
         while (file_buf[i] != '\0')
@@ -182,7 +182,7 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    fprintf(stderr, "client opened socket\n");
+    //fprintf(stderr, "client opened socket\n");
 
     // Connect to otp_enc_d
     if (
@@ -198,7 +198,7 @@ int main(int argc, char** argv)
         return 2;
     }
 
-    fprintf(stderr, "client connected socket\n");
+    //fprintf(stderr, "client connected socket\n");
 
     // Send handshake
     if (send_msg(socket_fd, MAGIC_HANDSHAKE, strlen(MAGIC_HANDSHAKE)) < 0)
@@ -249,13 +249,13 @@ int main(int argc, char** argv)
         return send_res;
     }
 
-    fprintf(stderr, "client is done sending\n");
+    //fprintf(stderr, "client is done sending\n");
 
     // Slorp up the data we get back and output directly to `stdout`
     int chars_recved;
     do
     {
-        fprintf(stderr, "client memsetting recv_buf...\n");
+        //fprintf(stderr, "client memsetting recv_buf...\n");
         memset(recv_buf, '\0', sizeof(recv_buf));
 
         chars_recved = recv(socket_fd, recv_buf, sizeof(recv_buf) - 1, 0);
@@ -269,20 +269,20 @@ int main(int argc, char** argv)
         }
         if (chars_recved == 0)
         {
-            fprintf(stderr, "client: chars_recved == 0\n");
+            //fprintf(stderr, "client: chars_recved == 0\n");
             break;
         }
-        fprintf(stderr, "client: chars_recved == %d\n", chars_recved);
+        //fprintf(stderr, "client: chars_recved == %d\n", chars_recved);
 
         char* newline_loc = strchr(recv_buf, '\n');
         if (newline_loc == NULL)
         {
-            fprintf(stderr, "client: newline_loc == NULL; recv_buf == \"%s\"\n", recv_buf);
+            //fprintf(stderr, "client: newline_loc == NULL; recv_buf == \"%s\"\n", recv_buf);
             write(STDOUT_FILENO, recv_buf, strlen(recv_buf));
         }
         else
         {
-            fprintf(stderr, "client: newline_loc != NULL recv_buf == \"%s\"\n", recv_buf);
+            //fprintf(stderr, "client: newline_loc != NULL recv_buf == \"%s\"\n", recv_buf);
             write(STDOUT_FILENO, recv_buf, newline_loc - recv_buf + 1);
             break;
         }
@@ -291,19 +291,19 @@ int main(int argc, char** argv)
     write(STDOUT_FILENO, "\n", 1);
     fflush(stdout);
 
-    fprintf(stderr, "client cleanup\n");
+    //fprintf(stderr, "client cleanup\n");
 
     // Cleanup
     fclose(key);
     fclose(plaintext);
-    fprintf(stderr, "client fclosed\n");
+    //fprintf(stderr, "client fclosed\n");
     if (shutdown(socket_fd, SHUT_RDWR) < 0)
     {
         perror("otp_enc ERROR shutting down socket connection");
         close(socket_fd);
         return 1;
     }
-    fprintf(stderr, "client shutdown\n");
+    //fprintf(stderr, "client shutdown\n");
     close(socket_fd);
 
     return 0;

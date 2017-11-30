@@ -180,7 +180,7 @@ int handshake(int conn_fd)
         return send_res;
     }
 
-    fprintf(stderr, "hot damn\n");
+    //fprintf(stderr, "hot damn\n");
 
     return 0;
 }
@@ -214,7 +214,7 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    fprintf(stderr, "server opened socket\n");
+    //fprintf(stderr, "server opened socket\n");
 
     // Enable the socket to start listening
     if (
@@ -227,9 +227,9 @@ int main(int argc, char** argv)
         perror("otp_enc_d ERROR on binding socket");
         return 1;
     }
-    fprintf(stderr, "server bound socket\n");
+    //fprintf(stderr, "server bound socket\n");
     listen(socket_fd, 5);
-    fprintf(stderr, "server is listening\n");
+    //fprintf(stderr, "server is listening\n");
 
     // Start accepting connections
     while (1)
@@ -246,12 +246,12 @@ int main(int argc, char** argv)
             perror("otp_enc_d ERROR on accept");
             return 1;
         }
-        fprintf(stderr, "server accepted conn\n");
+        //fprintf(stderr, "server accepted conn\n");
 
         int empty_slots = check_on_children();
         if (empty_slots == 0)
         {
-            fprintf(stderr, "otp_enc_d rejected connection: already have %d connections\n", MAX_CONNECTIONS);
+            //fprintf(stderr, "otp_enc_d rejected connection: already have %d connections\n", MAX_CONNECTIONS);
             close(est_conn_fd);
             continue;
         }
@@ -263,7 +263,7 @@ int main(int argc, char** argv)
         }
 
         pid_t spawned_pid = fork();
-        fprintf(stderr, "server: fork!\n");
+        //fprintf(stderr, "server: fork!\n");
         if (spawned_pid == -1)
         {
             perror("fork() failed!");
@@ -273,7 +273,7 @@ int main(int argc, char** argv)
         }
         else if (spawned_pid == 0) // In the child process
         {
-            fprintf(stderr, "server child process reporting in\n");
+            //fprintf(stderr, "server child process reporting in\n");
             // Get the plaintext content from the client, storing it in
             // dynamically allocated memory
             char recv_buf[RECV_CHUNK_SIZE];
@@ -288,7 +288,7 @@ int main(int argc, char** argv)
             int key_len = 0;
             key[0] = '\0';
 
-            fprintf(stderr, "server malloc'd\n");
+            //fprintf(stderr, "server malloc'd\n");
 
             // Initial handshake to confirm that we are getting a connection
             // from otp_enc
@@ -328,7 +328,7 @@ int main(int argc, char** argv)
                 int chars_to_cpy = chars_recved;
                 if (newline_loc != NULL)
                 {
-                    fprintf(stderr, "server: newline_loc != NULL\n");
+                    //fprintf(stderr, "server: newline_loc != NULL\n");
                     // If we see the newline signifying the end of the plain
                     // text segment, then we want to get only the part leading
                     // up to the newline and potentially any trailing "key"
@@ -350,7 +350,7 @@ int main(int argc, char** argv)
                 // Allocate more space if necessary
                 while (plaintext_len + chars_to_cpy > plaintext_cap - 1)
                 {
-                    fprintf(stderr, "server realloc'ing\n");
+                    //fprintf(stderr, "server realloc'ing\n");
                     plaintext_cap *= 2;
                     plaintext = realloc(
                         plaintext,
@@ -392,7 +392,8 @@ int main(int argc, char** argv)
                 int chars_to_cpy = chars_recved;
                 if (newline_loc != NULL)
                 {
-                    fprintf(stderr, "server: newline_loc != NULL\n");
+                    //fprintf(stderr, "server: newline_loc != NULL\n");
+
                     // If we see the newline signifying the end of the key
                     // segment, then we want to get only the part leading
                     // up to the newline and then stop reading altogether
@@ -403,7 +404,7 @@ int main(int argc, char** argv)
                 // Allocate more space if necessary
                 while (key_len + chars_to_cpy > key_cap - 1)
                 {
-                    fprintf(stderr, "server realloc'ing\n");
+                    //fprintf(stderr, "server realloc'ing\n");
                     key_cap *= 2;
                     key = realloc(key, key_cap * sizeof(char));
                 }
@@ -426,10 +427,10 @@ int main(int argc, char** argv)
                 return 1;
             }
 
-            fprintf(stderr, "server: encoding? (plaintext_len == %d)\n", plaintext_len);
+            //fprintf(stderr, "server: encoding? (plaintext_len == %d)\n", plaintext_len);
             // Do the encoding, overwriting the `plaintext` buffer
             encode(plaintext, plaintext_len, key);
-            fprintf(stderr, "server: encoded!\n");
+            //fprintf(stderr, "server: encoded!\n");
 
             // Send back the encoded message
             int send_res = send_msg(est_conn_fd, plaintext, plaintext_len);
@@ -441,19 +442,19 @@ int main(int argc, char** argv)
             }
 
             // Child cleanup
-            fprintf(stderr, "server: child cleanup\n");
+            //fprintf(stderr, "server: child cleanup\n");
             free(key);
             free(plaintext);
-            fprintf(stderr, "server: free'd\n");
+            //fprintf(stderr, "server: free'd\n");
             if (shutdown(est_conn_fd, SHUT_RDWR) < 0)
             {
                 perror("otp_enc_d ERROR shutting down socket connection");
                 close(est_conn_fd);
                 return 1;
             }
-            fprintf(stderr, "server: child shutdown\n");
+            //fprintf(stderr, "server: child shutdown\n");
             close(est_conn_fd);
-            fprintf(stderr, "server: child closed\n");
+            //fprintf(stderr, "server: child closed\n");
 
             return 0;
         }
@@ -472,16 +473,16 @@ int main(int argc, char** argv)
     }
 
     // Cleanup
-    fprintf(stderr, "server: main cleanup\n");
+    //fprintf(stderr, "server: main cleanup\n");
     kill_children();
-    fprintf(stderr, "server: children killed\n");
+    //fprintf(stderr, "server: children killed\n");
     if (shutdown(socket_fd, SHUT_RDWR) < 0)
     {
         perror("otp_enc_d ERROR shutting down main socket connection");
         close(socket_fd);
         return 1;
     }
-    fprintf(stderr, "server: main shutdown\n");
+    //fprintf(stderr, "server: main shutdown\n");
     close(socket_fd);
 
     return 0;

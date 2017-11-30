@@ -12,20 +12,26 @@
 
 int send_contents(FILE* fh, int socket_fd)
 {
+    fprintf(stderr, "client sending contents\n");
+
     char file_buf[FILE_CHUNK_SIZE];
     while (fgets(file_buf, FILE_CHUNK_SIZE, fh) != NULL)
     {
+        fprintf(stderr, "client: fgets(file_buf, FILE_CHUNK_SIZE, fh) != NULL\n");
         // Check that this chunk of the file is ready to be sent
         int i = 0;
         while (file_buf[i] != '\0')
         {
+            fprintf(stderr, "client: file_buf[%d] == '%c'\n", i, file_buf[i]);
             if (file_buf[i] == '\n')
             {
                 file_buf[i + 1] = '\0'; // Just making sure we don't send
                                         // anything beyond the delimiter
             }
-            else if ('A' > file_buf[i] || 'Z' < file_buf[i])
-            {
+            else if (
+                ('A' > file_buf[i] || 'Z' < file_buf[i]) &&
+                file_buf[i] != ' '
+            ) {
                 fprintf(
                     stderr,
                     "otp_enc ERROR: unrecognized character '%c'\n",
@@ -41,6 +47,7 @@ int send_contents(FILE* fh, int socket_fd)
         int total_written = 0;
         while (total_written < i)
         {
+            fprintf(stderr, "client: total_written == %d\n", total_written);
             int chars_written = send(
                 socket_fd,
                 &file_buf[total_written],
@@ -52,6 +59,7 @@ int send_contents(FILE* fh, int socket_fd)
                 perror("otp_enc ERROR writing to socket");
                 return 1;
             }
+            fprintf(stderr, "client sent\n");
 
             total_written += chars_written;
         }
@@ -125,10 +133,15 @@ int handle_args(int    argc,
 
 int main(int argc, char** argv)
 {
+    // Handle the arguments passed into the program
     int port_num;
     FILE* plaintext;
     FILE* key;
-    handle_args(argc, argv, &port_num, &plaintext, &key);
+    int args_res = handle_args(argc, argv, &port_num, &plaintext, &key);
+    if (args_res != 0)
+    {
+        return args_res;
+    }
 
     // Clear and fill the server address struct
     struct sockaddr_in server_addr = {0};
@@ -155,6 +168,8 @@ int main(int argc, char** argv)
         return 1;
     }
 
+    fprintf(stderr, "client opened socket\n");
+
     // Connect to otp_enc_d
     if (
         connect(
@@ -166,6 +181,8 @@ int main(int argc, char** argv)
         perror("otp_enc ERROR connecting to otp_enc_d");
         return 2;
     }
+
+    fprintf(stderr, "client connected socket\n");
 
     // Read "chunks" of the `plaintext` file, sending each one sequentially
     // after checking that all the characters are valid
@@ -187,11 +204,14 @@ int main(int argc, char** argv)
         return send_res;
     }
 
+    fprintf(stderr, "client is done sending\n");
+
     // Slorp up the data we get back and output directly to `stdout`
     char recv_buf[FILE_CHUNK_SIZE];
     int chars_recved;
     do
     {
+        fprintf(stderr, "client memsetting recv_buf...\n");
         memset(recv_buf, '\0', sizeof(recv_buf));
 
         chars_recved = recv(socket_fd, recv_buf, sizeof(recv_buf) - 1, 0);
@@ -205,30 +225,38 @@ int main(int argc, char** argv)
         }
         if (chars_recved == 0)
         {
+            fprintf(stderr, "client: chars_recved == 0\n");
             break;
         }
+        fprintf(stderr, "client: chars_recved == %d\n", chars_recved);
 
         char* newline_loc = strchr(recv_buf, '\n');
         if (newline_loc == NULL)
         {
+            fprintf(stderr, "client: newline_loc == NULL; recv_buf == \"%s\"\n", recv_buf);
             write(STDOUT_FILENO, recv_buf, strlen(recv_buf));
         }
         else
         {
+            fprintf(stderr, "client: newline_loc != NULL recv_buf == \"%s\"\n", recv_buf);
             write(STDOUT_FILENO, recv_buf, newline_loc - recv_buf + 1);
             break;
         }
     } while (1);
 
+    fprintf(stderr, "client cleanup\n");
+
     // Cleanup
     fclose(key);
     fclose(plaintext);
+    fprintf(stderr, "client fclosed\n");
     if (shutdown(socket_fd, SHUT_RDWR) < 0)
     {
         perror("otp_enc ERROR shutting down socket connection");
         close(socket_fd);
         return 1;
     }
+    fprintf(stderr, "client shutdown\n");
     close(socket_fd);
 
     return 0;

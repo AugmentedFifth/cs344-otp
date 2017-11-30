@@ -11,6 +11,8 @@ server.c
 
 # Crap
 *.i
+.nfs*
+key*
 
 # Prerequisites
 *.d

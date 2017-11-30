@@ -88,6 +88,101 @@ void kill_children(void)
     }
 }
 
+int send_msg(int conn_fd, const char* msg, int msg_len)
+{
+    int total_sent = 0;
+    while (total_sent < msg_len)
+    {
+        //fprintf(stderr, "server: total_sent == %d\n", total_sent);
+        int chars_sent = send(
+            conn_fd,
+            &msg[total_sent],
+            msg_len - total_sent,
+            0
+        );
+        if (chars_sent < 0)
+        {
+            perror("otp_enc_d ERROR writing to socket");
+            close(conn_fd);
+            return 1;
+        }
+        //fprintf(stderr, "server: sent %d\n", chars_sent);
+
+        total_sent += chars_sent;
+    }
+
+    return 0;
+}
+
+int do_recv(int conn_fd, char* buf, int buf_size)
+{
+    int chars_recved = recv(conn_fd, buf, buf_size - 1, 0);
+    if (chars_recved < 0)
+    {
+        perror("otp_enc_d ERROR reading from socket");
+        close(conn_fd);
+        return -1;
+    }
+    //fprintf(stderr, "server recv'd: \"%s\"\n", buf);
+
+    return chars_recved;
+}
+
+int handshake(int conn_fd)
+{
+    // Check that the client sends exactly `MAGIC_HANDSHAKE`
+    int seen_magic = 0;
+    int magic_ix = 0;
+    while (!seen_magic)
+    {
+        char recv_buf[RECV_CHUNK_SIZE] = {0};
+        int handshake_char_count = do_recv(conn_fd, recv_buf, RECV_CHUNK_SIZE);
+        if (handshake_char_count < 0)
+        {
+            return -1;
+        }
+
+        int i;
+        for (i = 0; i < handshake_char_count; ++i)
+        {
+            if (
+                magic_ix + i >= strlen(MAGIC_HANDSHAKE) ||
+                recv_buf[i] != MAGIC_HANDSHAKE[magic_ix + i]
+            ) {
+                // Send rejection message
+                if (send_msg(conn_fd, "?", 1) < 0)
+                {
+                    return -1;
+                }
+
+                if (shutdown(conn_fd, SHUT_RDWR) < 0)
+                {
+                    perror("otp_enc_d ERROR shutting down socket connection");
+                }
+                close(conn_fd);
+                return -1;
+            }
+
+            if (recv_buf[i] == MAGIC_HANDSHAKE[strlen(MAGIC_HANDSHAKE) - 1])
+            {
+                seen_magic = 1;
+                break;
+            }
+        }
+
+        magic_ix = i;
+    }
+
+    // Acknowledge
+    int send_res = send_msg(conn_fd, ".", 1);
+    if (send_res < 0)
+    {
+        return send_res;
+    }
+
+    return 0;
+}
+
 int main(int argc, char** argv)
 {
     // Check usage and parse `<listening_port>`
@@ -193,26 +288,35 @@ int main(int argc, char** argv)
 
             fprintf(stderr, "server malloc'd\n");
 
+            // Initial handshake to confirm that we are getting a connection
+            // from otp_enc
+            int handshake_res = handshake(est_conn_fd);
+            if (handshake_res < 0)
+            {
+                free(key);
+                free(plaintext);
+                return 1;
+            }
+
+            // Start receiving body of message
             int recving_plaintext = 1;
+            int recving_key       = 1;
             while (recving_plaintext)
             {
                 memset(recv_buf, '\0', RECV_CHUNK_SIZE);
 
-                int chars_recved = recv(
+                int chars_recved = do_recv(
                     est_conn_fd,
                     recv_buf,
-                    RECV_CHUNK_SIZE - 1,
-                    0
+                    RECV_CHUNK_SIZE
                 );
                 if (chars_recved < 0)
                 {
-                    perror("otp_enc_d ERROR reading from socket");
                     free(key);
                     free(plaintext);
-                    close(est_conn_fd);
                     return 1;
                 }
-                fprintf(stderr, "server recv'd: \"%s\"\n", recv_buf);
+
                 if (chars_recved == 0)
                 {
                     recving_plaintext = 0;
@@ -229,11 +333,17 @@ int main(int argc, char** argv)
                     // data
                     chars_to_cpy = newline_loc - recv_buf;
 
+                    char* snd_newline_loc = strchr(newline_loc + 1, '\n');
+
                     key_len += chars_recved - chars_to_cpy - 1;
                     strncpy(key, newline_loc + 1, key_len);
                     key[key_len] = '\0';
 
                     recving_plaintext = 0;
+                    if (snd_newline_loc != NULL)
+                    {
+                        recving_key = 0;
+                    }
                 }
                 // Allocate more space if necessary
                 while (plaintext_len + chars_to_cpy > plaintext_cap - 1)
@@ -255,29 +365,25 @@ int main(int argc, char** argv)
                 plaintext[plaintext_len] = '\0';
             }
 
-            while (1)
+            while (recving_key)
             {
                 memset(recv_buf, '\0', RECV_CHUNK_SIZE);
 
-                int chars_recved = recv(
+                int chars_recved = do_recv(
                     est_conn_fd,
                     recv_buf,
-                    RECV_CHUNK_SIZE - 1,
-                    0
+                    RECV_CHUNK_SIZE
                 );
                 if (chars_recved < 0)
                 {
-                    perror("otp_enc_d ERROR reading from socket");
                     free(key);
                     free(plaintext);
-                    close(est_conn_fd);
                     return 1;
                 }
-                fprintf(stderr, "server recv'd: \"%s\"\n", recv_buf);
-                int do_break = 0;
+
                 if (chars_recved == 0)
                 {
-                    do_break = 1;
+                    recving_key = 0;
                 }
 
                 char* newline_loc = strchr(recv_buf, '\n');
@@ -290,7 +396,7 @@ int main(int argc, char** argv)
                     // up to the newline and then stop reading altogether
                     chars_to_cpy = newline_loc - recv_buf;
 
-                    do_break = 1;
+                    recving_key = 0;
                 }
                 // Allocate more space if necessary
                 while (key_len + chars_to_cpy > key_cap - 1)
@@ -303,11 +409,6 @@ int main(int argc, char** argv)
                 strncpy(&key[key_len], recv_buf, chars_to_cpy);
                 key_len += chars_to_cpy;
                 key[key_len] = '\0';
-
-                if (do_break)
-                {
-                    break;
-                }
             }
 
             // Check to make sure we have enough key
@@ -329,27 +430,12 @@ int main(int argc, char** argv)
             fprintf(stderr, "server: encoded!\n");
 
             // Send back the encoded message
-            int total_sent = 0;
-            while (total_sent < plaintext_len)
+            int send_res = send_msg(est_conn_fd, plaintext, plaintext_len);
+            if (send_res != 0)
             {
-                fprintf(stderr, "server: total_sent == %d\n", total_sent);
-                int chars_sent = send(
-                    est_conn_fd,
-                    &plaintext[total_sent],
-                    plaintext_len - total_sent,
-                    0
-                );
-                if (chars_sent < 0)
-                {
-                    perror("otp_enc_d ERROR writing to socket");
-                    free(key);
-                    free(plaintext);
-                    close(est_conn_fd);
-                    return 1;
-                }
-                fprintf(stderr, "server: sent %d\n", chars_sent);
-
-                total_sent += chars_sent;
+                free(key);
+                free(plaintext);
+                return send_res;
             }
 
             // Child cleanup

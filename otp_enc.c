@@ -22,7 +22,7 @@ int send_contents(FILE* fh, int socket_fd)
         int i = 0;
         while (file_buf[i] != '\0')
         {
-            fprintf(stderr, "client: file_buf[%d] == '%c'\n", i, file_buf[i]);
+            //fprintf(stderr, "client: file_buf[%d] == '%c'\n", i, file_buf[i]);
             if (file_buf[i] == '\n')
             {
                 file_buf[i + 1] = '\0'; // Just making sure we don't send
@@ -243,6 +243,9 @@ int main(int argc, char** argv)
             break;
         }
     } while (1);
+
+    write(STDOUT_FILENO, "\n", 1);
+    fflush(stdout);
 
     fprintf(stderr, "client cleanup\n");
 

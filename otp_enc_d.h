@@ -82,3 +82,24 @@ int do_recv(int conn_fd, char* buf, int buf_size);
 //
 // **Returns** negative on failure, 0 on success.
 int handshake(int conn_fd);
+
+// Handles a client connection.
+//
+// To be called by any child processes spawned to handle requests.
+//
+// ## Parameters:
+// * `est_conn_fd` - The file descriptor of the socket that is handling the
+//                   client's connection
+//
+// **Returns** an exit code for the child process; 0 on success.
+int handle_client(int est_conn_fd);
+
+// The main server loop, which accepts client connections and hands them off
+// to `fork()`ed child processes.
+//
+// ## Parameters:
+// * `socket_fd` - The main socket that is listening on the port specified at
+//                 the start of the program.
+//
+// **Returns** an exit code for the main process; 0 on success.
+int server_loop(int socket_fd);

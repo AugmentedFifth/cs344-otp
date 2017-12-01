@@ -184,13 +184,191 @@ int handshake(int conn_fd)
     return 0;
 }
 
+int handle_client(int est_conn_fd)
+{
+    // Get the plaintext content from the client, storing it in
+    // dynamically allocated memory
+    char recv_buf[RECV_CHUNK_SIZE];
+
+    char* plaintext = malloc(RECV_CHUNK_SIZE * sizeof(char));
+    int plaintext_cap = RECV_CHUNK_SIZE;
+    int plaintext_len = 0;
+    plaintext[0] = '\0';
+
+    char* key = malloc(RECV_CHUNK_SIZE * sizeof(char));
+    int key_cap = RECV_CHUNK_SIZE;
+    int key_len = 0;
+    key[0] = '\0';
+
+    // Initial handshake to confirm that we are getting a connection
+    // from otp_enc
+    int handshake_res = handshake(est_conn_fd);
+    if (handshake_res < 0)
+    {
+        free(key);
+        free(plaintext);
+        return 1;
+    }
+
+    // Start receiving body of message.
+    // We use these boolean (`int`) variables as flags to indicate how "far"
+    // we've read into the client's message. Message sections are ended by the
+    // `'\n'` character
+    int recving_plaintext = 1;
+    int recving_key       = 1;
+    while (recving_plaintext)
+    {
+        memset(recv_buf, '\0', RECV_CHUNK_SIZE);
+
+        int chars_recved = do_recv(
+            est_conn_fd,
+            recv_buf,
+            RECV_CHUNK_SIZE
+        );
+        if (chars_recved < 0)
+        {
+            free(key);
+            free(plaintext);
+            return 1;
+        }
+
+        if (chars_recved == 0)
+        {
+            recving_plaintext = 0;
+        }
+
+        char* newline_loc = strchr(recv_buf, '\n');
+        int chars_to_cpy = chars_recved;
+        if (newline_loc != NULL)
+        {
+            // If we see the newline signifying the end of the plain
+            // text segment, then we want to get only the part leading
+            // up to the newline and potentially any trailing "key"
+            // data
+            chars_to_cpy = newline_loc - recv_buf;
+
+            char* snd_newline_loc = strchr(newline_loc + 1, '\n');
+
+            key_len += chars_recved - chars_to_cpy - 1;
+            strncpy(key, newline_loc + 1, key_len);
+            key[key_len] = '\0';
+
+            recving_plaintext = 0;
+            if (snd_newline_loc != NULL)
+            {
+                recving_key = 0;
+            }
+        }
+        // Allocate more space if necessary
+        while (plaintext_len + chars_to_cpy > plaintext_cap - 1)
+        {
+            plaintext_cap *= 2;
+            plaintext = realloc(
+                plaintext,
+                plaintext_cap * sizeof(char)
+            );
+        }
+
+        strncpy(
+            &plaintext[plaintext_len],
+            recv_buf,
+            chars_to_cpy
+        );
+        plaintext_len += chars_to_cpy;
+        plaintext[plaintext_len] = '\0';
+    }
+
+    // Similar logic to the above loop
+    while (recving_key)
+    {
+        memset(recv_buf, '\0', RECV_CHUNK_SIZE);
+
+        int chars_recved = do_recv(
+            est_conn_fd,
+            recv_buf,
+            RECV_CHUNK_SIZE
+        );
+        if (chars_recved < 0)
+        {
+            free(key);
+            free(plaintext);
+            return 1;
+        }
+
+        if (chars_recved == 0)
+        {
+            recving_key = 0;
+        }
+
+        char* newline_loc = strchr(recv_buf, '\n');
+        int chars_to_cpy = chars_recved;
+        if (newline_loc != NULL)
+        {
+            // If we see the newline signifying the end of the key
+            // segment, then we want to get only the part leading
+            // up to the newline and then stop reading altogether
+            chars_to_cpy = newline_loc - recv_buf;
+
+            recving_key = 0;
+        }
+        // Allocate more space if necessary
+        while (key_len + chars_to_cpy > key_cap - 1)
+        {
+            key_cap *= 2;
+            key = realloc(key, key_cap * sizeof(char));
+        }
+
+        strncpy(&key[key_len], recv_buf, chars_to_cpy);
+        key_len += chars_to_cpy;
+        key[key_len] = '\0';
+    }
+
+    // Check to make sure we have enough key
+    if (key_len < plaintext_len)
+    {
+        fprintf(
+            stderr,
+            "otp_enc_d ERROR: key is shorter than plain text portion\n"
+        );
+        free(key);
+        free(plaintext);
+        close(est_conn_fd);
+        return 1;
+    }
+
+    // Do the encoding, overwriting the `plaintext` buffer
+    encode(plaintext, plaintext_len, key);
+
+    // Send back the encoded message
+    int send_res = send_msg(est_conn_fd, plaintext, plaintext_len);
+    if (send_res != 0)
+    {
+        free(key);
+        free(plaintext);
+        return send_res;
+    }
+
+    // Child cleanup
+    free(key);
+    free(plaintext);
+    if (shutdown(est_conn_fd, SHUT_RDWR) < 0)
+    {
+        perror("otp_enc_d ERROR shutting down socket connection");
+        close(est_conn_fd);
+        return 1;
+    }
+    close(est_conn_fd);
+
+    return 0;
+}
+
 int server_loop(int socket_fd)
 {
     while (1)
     {
         struct sockaddr_in client_addr;
         socklen_t client_info_size = sizeof(client_addr);
-        int est_conn_fd = accept(
+        int est_conn_fd = accept( // Obtain a connection
             socket_fd,
             (struct sockaddr*)&client_addr,
             &client_info_size
@@ -202,12 +380,12 @@ int server_loop(int socket_fd)
         }
 
         int empty_slots = check_on_children();
-        if (empty_slots == 0)
-        {
-            close(est_conn_fd);
+        if (empty_slots == 0)   // Immediately close socket, rejecting client
+        {                       // because we already have the max number of
+            close(est_conn_fd); // clients connected
             continue;
         }
-        else if (empty_slots < 0)
+        else if (empty_slots < 0) // Something is terribly wrong
         {
             close(socket_fd);
             close(est_conn_fd);
@@ -224,179 +402,11 @@ int server_loop(int socket_fd)
         }
         else if (spawned_pid == 0) // In the child process
         {
-            // Get the plaintext content from the client, storing it in
-            // dynamically allocated memory
-            char recv_buf[RECV_CHUNK_SIZE];
-
-            char* plaintext = malloc(RECV_CHUNK_SIZE * sizeof(char));
-            int plaintext_cap = RECV_CHUNK_SIZE;
-            int plaintext_len = 0;
-            plaintext[0] = '\0';
-
-            char* key = malloc(RECV_CHUNK_SIZE * sizeof(char));
-            int key_cap = RECV_CHUNK_SIZE;
-            int key_len = 0;
-            key[0] = '\0';
-
-            // Initial handshake to confirm that we are getting a connection
-            // from otp_enc
-            int handshake_res = handshake(est_conn_fd);
-            if (handshake_res < 0)
-            {
-                free(key);
-                free(plaintext);
-                return 1;
-            }
-
-            // Start receiving body of message
-            int recving_plaintext = 1;
-            int recving_key       = 1;
-            while (recving_plaintext)
-            {
-                memset(recv_buf, '\0', RECV_CHUNK_SIZE);
-
-                int chars_recved = do_recv(
-                    est_conn_fd,
-                    recv_buf,
-                    RECV_CHUNK_SIZE
-                );
-                if (chars_recved < 0)
-                {
-                    free(key);
-                    free(plaintext);
-                    return 1;
-                }
-
-                if (chars_recved == 0)
-                {
-                    recving_plaintext = 0;
-                }
-
-                char* newline_loc = strchr(recv_buf, '\n');
-                int chars_to_cpy = chars_recved;
-                if (newline_loc != NULL)
-                {
-                    // If we see the newline signifying the end of the plain
-                    // text segment, then we want to get only the part leading
-                    // up to the newline and potentially any trailing "key"
-                    // data
-                    chars_to_cpy = newline_loc - recv_buf;
-
-                    char* snd_newline_loc = strchr(newline_loc + 1, '\n');
-
-                    key_len += chars_recved - chars_to_cpy - 1;
-                    strncpy(key, newline_loc + 1, key_len);
-                    key[key_len] = '\0';
-
-                    recving_plaintext = 0;
-                    if (snd_newline_loc != NULL)
-                    {
-                        recving_key = 0;
-                    }
-                }
-                // Allocate more space if necessary
-                while (plaintext_len + chars_to_cpy > plaintext_cap - 1)
-                {
-                    plaintext_cap *= 2;
-                    plaintext = realloc(
-                        plaintext,
-                        plaintext_cap * sizeof(char)
-                    );
-                }
-
-                strncpy(
-                    &plaintext[plaintext_len],
-                    recv_buf,
-                    chars_to_cpy
-                );
-                plaintext_len += chars_to_cpy;
-                plaintext[plaintext_len] = '\0';
-            }
-
-            while (recving_key)
-            {
-                memset(recv_buf, '\0', RECV_CHUNK_SIZE);
-
-                int chars_recved = do_recv(
-                    est_conn_fd,
-                    recv_buf,
-                    RECV_CHUNK_SIZE
-                );
-                if (chars_recved < 0)
-                {
-                    free(key);
-                    free(plaintext);
-                    return 1;
-                }
-
-                if (chars_recved == 0)
-                {
-                    recving_key = 0;
-                }
-
-                char* newline_loc = strchr(recv_buf, '\n');
-                int chars_to_cpy = chars_recved;
-                if (newline_loc != NULL)
-                {
-                    // If we see the newline signifying the end of the key
-                    // segment, then we want to get only the part leading
-                    // up to the newline and then stop reading altogether
-                    chars_to_cpy = newline_loc - recv_buf;
-
-                    recving_key = 0;
-                }
-                // Allocate more space if necessary
-                while (key_len + chars_to_cpy > key_cap - 1)
-                {
-                    key_cap *= 2;
-                    key = realloc(key, key_cap * sizeof(char));
-                }
-
-                strncpy(&key[key_len], recv_buf, chars_to_cpy);
-                key_len += chars_to_cpy;
-                key[key_len] = '\0';
-            }
-
-            // Check to make sure we have enough key
-            if (key_len < plaintext_len)
-            {
-                fprintf(
-                    stderr,
-                    "otp_enc_d ERROR: key is shorter than plain text portion\n"
-                );
-                free(key);
-                free(plaintext);
-                close(est_conn_fd);
-                return 1;
-            }
-
-            // Do the encoding, overwriting the `plaintext` buffer
-            encode(plaintext, plaintext_len, key);
-
-            // Send back the encoded message
-            int send_res = send_msg(est_conn_fd, plaintext, plaintext_len);
-            if (send_res != 0)
-            {
-                free(key);
-                free(plaintext);
-                return send_res;
-            }
-
-            // Child cleanup
-            free(key);
-            free(plaintext);
-            if (shutdown(est_conn_fd, SHUT_RDWR) < 0)
-            {
-                perror("otp_enc_d ERROR shutting down socket connection");
-                close(est_conn_fd);
-                return 1;
-            }
-            close(est_conn_fd);
-
-            return 0;
+            return handle_client(est_conn_fd);
         }
         else // Parent process
         {
+            // Register child process with the global pool
             int i;
             for (i = 0; i < MAX_CONNECTIONS; ++i)
             {

@@ -216,6 +216,10 @@ int main(int argc, char** argv)
     if (recv_buf[0] != ACK_CHAR)
     {
         fprintf(stderr, "otp_dec ERROR: rejected by server!\n");
+        fprintf(
+            stderr,
+            "(you probably connected to something that wasn't otp_dec_d)\n"
+        );
         close(socket_fd);
         fclose(key);
         fclose(plaintext);

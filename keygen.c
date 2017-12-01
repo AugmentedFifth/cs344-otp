@@ -5,8 +5,8 @@
 #include <time.h>   // time
 
 
-// Returns a random character that is a capital letter or a space.
-// Uses `rand()`.
+/*** Implementations ***/
+
 char random_char(void)
 {
     int r = rand() % 27;
@@ -24,11 +24,7 @@ int main(int argc, char** argv)
     // Make sure the program was invoked with exactly one argument
     if (argc != 2)
     {
-        fprintf(
-            stderr,
-            "Exactly one argument, the key length, must be specified.\n"
-        );
-
+        fprintf(stderr, "Usage: %s <keylength>\n", argv[0]);
         return 1;
     }
 

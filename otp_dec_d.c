@@ -10,15 +10,12 @@
 #include <unistd.h>     // fork
 
 
-/*** Ghoulish, Ghastly Globals ***/
+/*** Globals ***/
 pid_t children[MAX_CONNECTIONS] = {0};
 
 
-/*** Implementations ***/
-
 char char_of_val(int val)
 {
-    val %= 27;
     return val == 26 ? ' ' : 'A' + val;
 }
 
@@ -35,8 +32,7 @@ void encode(char* plaintext, int text_len, const char* key)
         int text_val = val_of_char(plaintext[i]);
         int key_val  = val_of_char(key[i]);
 
-        // Overwriting plaintext buffer
-        plaintext[i] = char_of_val(text_val + key_val);
+        plaintext[i] = char_of_val((text_val + key_val) % 27);
     }
 }
 
@@ -48,7 +44,7 @@ int check_on_children(void)
     {
         if (children[i] == 0)
         {
-            empty_slots++; // Slot is already empty
+            empty_slots++;
         }
         else
         {
@@ -67,8 +63,8 @@ int check_on_children(void)
                 {
                     break;
                 }
-                default: // Wasn't empty before, but we joined it and now it's
-                {        // a clear spot
+                default: // Got one
+                {
                     children[i] = 0;
                     empty_slots++;
                     break;
@@ -95,20 +91,22 @@ void kill_children(void)
 int send_msg(int conn_fd, const char* msg, int msg_len)
 {
     int total_sent = 0;
-    while (total_sent < msg_len) // Keep sending until the entire message
-    {                            // is in the send buffer
+    while (total_sent < msg_len)
+    {
+        //fprintf(stderr, "server: total_sent == %d\n", total_sent);
         int chars_sent = send(
             conn_fd,
             &msg[total_sent],
             msg_len - total_sent,
             0
         );
-        if (chars_sent < 0) // D'oh
+        if (chars_sent < 0)
         {
             perror("otp_enc_d ERROR writing to socket");
             close(conn_fd);
             return 1;
         }
+        //fprintf(stderr, "server: sent %d\n", chars_sent);
 
         total_sent += chars_sent;
     }
@@ -119,12 +117,13 @@ int send_msg(int conn_fd, const char* msg, int msg_len)
 int do_recv(int conn_fd, char* buf, int buf_size)
 {
     int chars_recved = recv(conn_fd, buf, buf_size - 1, 0);
-    if (chars_recved < 0) // !!!
+    if (chars_recved < 0)
     {
         perror("otp_enc_d ERROR reading from socket");
         close(conn_fd);
         return -1;
     }
+    //fprintf(stderr, "server recv'd: \"%s\"\n", buf);
 
     return chars_recved;
 }
@@ -138,7 +137,7 @@ int handshake(int conn_fd)
     {
         char recv_buf[RECV_CHUNK_SIZE] = {0};
         int handshake_char_count = do_recv(conn_fd, recv_buf, RECV_CHUNK_SIZE);
-        if (handshake_char_count < 0) // Catastrophe
+        if (handshake_char_count < 0)
         {
             return -1;
         }
@@ -181,11 +180,58 @@ int handshake(int conn_fd)
         return send_res;
     }
 
+    //fprintf(stderr, "hot damn\n");
+
     return 0;
 }
 
-int server_loop(int socket_fd)
+int main(int argc, char** argv)
 {
+    // Check usage and parse `<listening_port>`
+    if (argc != 2)
+    {
+        fprintf(stderr, "USAGE: %s <listening_port>\n", argv[0]);
+        return 1;
+    }
+    int listening_port = atoi(argv[1]);
+    if (listening_port < 1)
+    {
+        fprintf(stderr, "listening_port must be a positive integer\n");
+        return 1;
+    }
+
+    // Clear and fill up address struct for this process
+    struct sockaddr_in server_addr = {0};
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(listening_port);
+    server_addr.sin_addr.s_addr = INADDR_ANY;
+
+    // Set up the socket
+    int socket_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (socket_fd < 0)
+    {
+        perror("otp_enc_d ERROR opening socket");
+        return 1;
+    }
+
+    //fprintf(stderr, "server opened socket\n");
+
+    // Enable the socket to start listening
+    if (
+        bind(
+            socket_fd,
+            (struct sockaddr*)&server_addr,
+            sizeof(server_addr)
+        ) < 0
+    ) {
+        perror("otp_enc_d ERROR on binding socket");
+        return 1;
+    }
+    //fprintf(stderr, "server bound socket\n");
+    listen(socket_fd, 5);
+    //fprintf(stderr, "server is listening\n");
+
+    // Start accepting connections
     while (1)
     {
         struct sockaddr_in client_addr;
@@ -200,10 +246,12 @@ int server_loop(int socket_fd)
             perror("otp_enc_d ERROR on accept");
             return 1;
         }
+        //fprintf(stderr, "server accepted conn\n");
 
         int empty_slots = check_on_children();
         if (empty_slots == 0)
         {
+            //fprintf(stderr, "otp_enc_d rejected connection: already have %d connections\n", MAX_CONNECTIONS);
             close(est_conn_fd);
             continue;
         }
@@ -215,6 +263,7 @@ int server_loop(int socket_fd)
         }
 
         pid_t spawned_pid = fork();
+        //fprintf(stderr, "server: fork!\n");
         if (spawned_pid == -1)
         {
             perror("fork() failed!");
@@ -224,6 +273,7 @@ int server_loop(int socket_fd)
         }
         else if (spawned_pid == 0) // In the child process
         {
+            //fprintf(stderr, "server child process reporting in\n");
             // Get the plaintext content from the client, storing it in
             // dynamically allocated memory
             char recv_buf[RECV_CHUNK_SIZE];
@@ -237,6 +287,8 @@ int server_loop(int socket_fd)
             int key_cap = RECV_CHUNK_SIZE;
             int key_len = 0;
             key[0] = '\0';
+
+            //fprintf(stderr, "server malloc'd\n");
 
             // Initial handshake to confirm that we are getting a connection
             // from otp_enc
@@ -276,6 +328,7 @@ int server_loop(int socket_fd)
                 int chars_to_cpy = chars_recved;
                 if (newline_loc != NULL)
                 {
+                    //fprintf(stderr, "server: newline_loc != NULL\n");
                     // If we see the newline signifying the end of the plain
                     // text segment, then we want to get only the part leading
                     // up to the newline and potentially any trailing "key"
@@ -297,6 +350,7 @@ int server_loop(int socket_fd)
                 // Allocate more space if necessary
                 while (plaintext_len + chars_to_cpy > plaintext_cap - 1)
                 {
+                    //fprintf(stderr, "server realloc'ing\n");
                     plaintext_cap *= 2;
                     plaintext = realloc(
                         plaintext,
@@ -338,6 +392,8 @@ int server_loop(int socket_fd)
                 int chars_to_cpy = chars_recved;
                 if (newline_loc != NULL)
                 {
+                    //fprintf(stderr, "server: newline_loc != NULL\n");
+
                     // If we see the newline signifying the end of the key
                     // segment, then we want to get only the part leading
                     // up to the newline and then stop reading altogether
@@ -348,6 +404,7 @@ int server_loop(int socket_fd)
                 // Allocate more space if necessary
                 while (key_len + chars_to_cpy > key_cap - 1)
                 {
+                    //fprintf(stderr, "server realloc'ing\n");
                     key_cap *= 2;
                     key = realloc(key, key_cap * sizeof(char));
                 }
@@ -370,8 +427,10 @@ int server_loop(int socket_fd)
                 return 1;
             }
 
+            //fprintf(stderr, "server: encoding? (plaintext_len == %d)\n", plaintext_len);
             // Do the encoding, overwriting the `plaintext` buffer
             encode(plaintext, plaintext_len, key);
+            //fprintf(stderr, "server: encoded!\n");
 
             // Send back the encoded message
             int send_res = send_msg(est_conn_fd, plaintext, plaintext_len);
@@ -383,15 +442,19 @@ int server_loop(int socket_fd)
             }
 
             // Child cleanup
+            //fprintf(stderr, "server: child cleanup\n");
             free(key);
             free(plaintext);
+            //fprintf(stderr, "server: free'd\n");
             if (shutdown(est_conn_fd, SHUT_RDWR) < 0)
             {
                 perror("otp_enc_d ERROR shutting down socket connection");
                 close(est_conn_fd);
                 return 1;
             }
+            //fprintf(stderr, "server: child shutdown\n");
             close(est_conn_fd);
+            //fprintf(stderr, "server: child closed\n");
 
             return 0;
         }
@@ -409,63 +472,18 @@ int server_loop(int socket_fd)
         }
     }
 
-    return 0;
-}
-
-int main(int argc, char** argv)
-{
-    // Check usage and parse `<listening_port>`
-    if (argc != 2)
-    {
-        fprintf(stderr, "USAGE: %s <listening_port>\n", argv[0]);
-        return 1;
-    }
-    int listening_port = atoi(argv[1]);
-    if (listening_port < 1)
-    {
-        fprintf(stderr, "listening_port must be a positive integer\n");
-        return 1;
-    }
-
-    // Clear and fill up address struct for this process
-    struct sockaddr_in server_addr = {0};
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(listening_port);
-    server_addr.sin_addr.s_addr = INADDR_ANY;
-
-    // Set up the socket
-    int socket_fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (socket_fd < 0)
-    {
-        perror("otp_enc_d ERROR opening socket");
-        return 1;
-    }
-
-    // Enable the socket to start listening
-    if (
-        bind(
-            socket_fd,
-            (struct sockaddr*)&server_addr,
-            sizeof(server_addr)
-        ) < 0
-    ) {
-        perror("otp_enc_d ERROR on binding socket");
-        return 1;
-    }
-    listen(socket_fd, 5);
-
-    // Start accepting connections
-    int ret = server_loop(socket_fd);
-
     // Cleanup
+    //fprintf(stderr, "server: main cleanup\n");
     kill_children();
+    //fprintf(stderr, "server: children killed\n");
     if (shutdown(socket_fd, SHUT_RDWR) < 0)
     {
         perror("otp_enc_d ERROR shutting down main socket connection");
         close(socket_fd);
         return 1;
     }
+    //fprintf(stderr, "server: main shutdown\n");
     close(socket_fd);
 
-    return ret;
+    return 0;
 }

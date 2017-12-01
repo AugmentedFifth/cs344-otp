@@ -10,24 +10,26 @@
 #include <unistd.h>     // close
 
 
-/*** Implementations ***/
-
 int send_contents(FILE* fh, int socket_fd)
 {
-    char file_buf[FILE_CHUNK_SIZE]; // Buffer to read the file into
-    while (fgets(file_buf, FILE_CHUNK_SIZE, fh) != NULL) // Read
+    //fprintf(stderr, "client sending contents\n");
+
+    char file_buf[FILE_CHUNK_SIZE];
+    while (fgets(file_buf, FILE_CHUNK_SIZE, fh) != NULL)
     {
+        //fprintf(stderr, "client: fgets(file_buf, FILE_CHUNK_SIZE, fh) != NULL\n");
         // Check that this chunk of the file is ready to be sent
         int i = 0;
         while (file_buf[i] != '\0')
         {
-            if (file_buf[i] == '\n') // That's all for this file
+            //fprintf(stderr, "client: file_buf[%d] == '%c'\n", i, file_buf[i]);
+            if (file_buf[i] == '\n')
             {
                 file_buf[i + 1] = '\0'; // Just making sure we don't send
                                         // anything beyond the delimiter
             }
             else if (
-                ('A' > file_buf[i] || 'Z' < file_buf[i]) && // Bad character
+                ('A' > file_buf[i] || 'Z' < file_buf[i]) &&
                 file_buf[i] != ' '
             ) {
                 fprintf(
@@ -51,11 +53,11 @@ int send_contents(FILE* fh, int socket_fd)
     return 0;
 }
 
-int handle_args(int          argc,
-                char* const* argv,
-                int*         port_num_,
-                FILE**       plaintext_,
-                FILE**       key_)
+int handle_args(int    argc,
+                char** argv,
+                int*   port_num_,
+                FILE** plaintext_,
+                FILE** key_)
 {
     // Check usage and parse `<port>`
     if (argc != 4)
@@ -107,7 +109,6 @@ int handle_args(int          argc,
         return 1;
     }
 
-    // Write relevant obtained values to ouput parameters
     *port_num_  = port_num;
     *plaintext_ = plaintext;
     *key_       = key;
@@ -118,19 +119,21 @@ int handle_args(int          argc,
 int send_msg(int conn_fd, const char* msg, int msg_len)
 {
     int total_written = 0;
-    while (total_written < msg_len) // Keep sending until the entire message
-    {                               // is in the send buffer
+    while (total_written < msg_len)
+    {
+        //fprintf(stderr, "client: total_written == %d\n", total_written);
         int chars_written = send(
             conn_fd,
             &msg[total_written],
             msg_len - total_written,
             0
         );
-        if (chars_written < 0) // Yeesh
+        if (chars_written < 0)
         {
             perror("otp_enc ERROR writing to socket");
             return -1;
         }
+        //fprintf(stderr, "client sent\n");
 
         total_written += chars_written;
     }
@@ -154,7 +157,7 @@ int main(int argc, char** argv)
     struct sockaddr_in server_addr = {0};
     server_addr.sin_family = AF_INET;
     server_addr.sin_port = htons(port_num);
-    // Hardcoding `"localhost"` since it's not specified as an argument
+    // Hardcoding "localhost" since it's not specified as an argument
     struct hostent* server_host_info = gethostbyname(HOST_NAME);
     if (server_host_info == NULL)
     {
@@ -179,6 +182,8 @@ int main(int argc, char** argv)
         return 1;
     }
 
+    //fprintf(stderr, "client opened socket\n");
+
     // Connect to otp_enc_d
     if (
         connect(
@@ -192,6 +197,8 @@ int main(int argc, char** argv)
         fclose(plaintext);
         return 2;
     }
+
+    //fprintf(stderr, "client connected socket\n");
 
     // Send handshake
     if (send_msg(socket_fd, MAGIC_HANDSHAKE, strlen(MAGIC_HANDSHAKE)) < 0)
@@ -242,10 +249,13 @@ int main(int argc, char** argv)
         return send_res;
     }
 
+    //fprintf(stderr, "client is done sending\n");
+
     // Slorp up the data we get back and output directly to `stdout`
     int chars_recved;
     do
     {
+        //fprintf(stderr, "client memsetting recv_buf...\n");
         memset(recv_buf, '\0', sizeof(recv_buf));
 
         chars_recved = recv(socket_fd, recv_buf, sizeof(recv_buf) - 1, 0);
@@ -259,16 +269,20 @@ int main(int argc, char** argv)
         }
         if (chars_recved == 0)
         {
+            //fprintf(stderr, "client: chars_recved == 0\n");
             break;
         }
+        //fprintf(stderr, "client: chars_recved == %d\n", chars_recved);
 
         char* newline_loc = strchr(recv_buf, '\n');
         if (newline_loc == NULL)
         {
+            //fprintf(stderr, "client: newline_loc == NULL; recv_buf == \"%s\"\n", recv_buf);
             write(STDOUT_FILENO, recv_buf, strlen(recv_buf));
         }
         else
         {
+            //fprintf(stderr, "client: newline_loc != NULL recv_buf == \"%s\"\n", recv_buf);
             write(STDOUT_FILENO, recv_buf, newline_loc - recv_buf + 1);
             break;
         }
@@ -277,15 +291,19 @@ int main(int argc, char** argv)
     write(STDOUT_FILENO, "\n", 1);
     fflush(stdout);
 
+    //fprintf(stderr, "client cleanup\n");
+
     // Cleanup
     fclose(key);
     fclose(plaintext);
+    //fprintf(stderr, "client fclosed\n");
     if (shutdown(socket_fd, SHUT_RDWR) < 0)
     {
         perror("otp_enc ERROR shutting down socket connection");
         close(socket_fd);
         return 1;
     }
+    //fprintf(stderr, "client shutdown\n");
     close(socket_fd);
 
     return 0;

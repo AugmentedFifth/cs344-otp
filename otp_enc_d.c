@@ -402,7 +402,7 @@ int server_loop(int socket_fd)
         }
         else if (spawned_pid == 0) // In the child process
         {
-            return handle_client(est_conn_fd);
+            exit(handle_client(est_conn_fd));
         }
         else // Parent process
         {

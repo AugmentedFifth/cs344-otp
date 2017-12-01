@@ -19,6 +19,11 @@ pid_t children[MAX_CONNECTIONS] = {0};
 char char_of_val(int val)
 {
     val %= 27;
+    if (val < 0) // Catch negative values of `val` giving negative remainders
+    {
+        val += 27;
+    }
+
     return val == 26 ? ' ' : 'A' + val;
 }
 
@@ -472,8 +477,7 @@ int main(int argc, char** argv)
     if (shutdown(socket_fd, SHUT_RDWR) < 0)
     {
         perror("otp_enc_d ERROR shutting down main socket connection");
-        close(socket_fd);
-        return 1;
+        ret = 1;
     }
     close(socket_fd);
 

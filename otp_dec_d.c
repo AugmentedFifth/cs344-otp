@@ -1,4 +1,4 @@
-#include "otp_enc_d.h"
+#include "otp_dec_d.h"
 
 #include <netinet/in.h> // sockaddr_in, htons, sockaddr
 #include <stdio.h>      // fprintf
@@ -10,12 +10,20 @@
 #include <unistd.h>     // fork
 
 
-/*** Globals ***/
+/*** Ghoulish, Ghastly Globals ***/
 pid_t children[MAX_CONNECTIONS] = {0};
 
 
+/*** Implementations ***/
+
 char char_of_val(int val)
 {
+    val %= 27;
+    if (val < 0) // Catch negative values of `val` giving negative remainders
+    {
+        val += 27;
+    }
+
     return val == 26 ? ' ' : 'A' + val;
 }
 
@@ -24,7 +32,7 @@ int val_of_char(char c)
     return c == ' ' ? 26 : c - 65;
 }
 
-void encode(char* plaintext, int text_len, const char* key)
+void decode(char* plaintext, int text_len, const char* key)
 {
     int i;
     for (i = 0; i < text_len; ++i)
@@ -32,7 +40,8 @@ void encode(char* plaintext, int text_len, const char* key)
         int text_val = val_of_char(plaintext[i]);
         int key_val  = val_of_char(key[i]);
 
-        plaintext[i] = char_of_val((text_val + key_val) % 27);
+        // Overwriting plaintext buffer
+        plaintext[i] = char_of_val(text_val - key_val);
     }
 }
 
@@ -44,7 +53,7 @@ int check_on_children(void)
     {
         if (children[i] == 0)
         {
-            empty_slots++;
+            empty_slots++; // Slot is already empty
         }
         else
         {
@@ -56,15 +65,15 @@ int check_on_children(void)
             {
                 case -1: // Yikes
                 {
-                    perror("otp_enc_d ERROR in waitpid()");
+                    perror("otp_dec_d ERROR in waitpid()");
                     return -1;
                 }
                 case 0:  // It's still going, so we leave it alone
                 {
                     break;
                 }
-                default: // Got one
-                {
+                default: // Wasn't empty before, but we joined it and now it's
+                {        // a clear spot
                     children[i] = 0;
                     empty_slots++;
                     break;
@@ -91,22 +100,20 @@ void kill_children(void)
 int send_msg(int conn_fd, const char* msg, int msg_len)
 {
     int total_sent = 0;
-    while (total_sent < msg_len)
-    {
-        //fprintf(stderr, "server: total_sent == %d\n", total_sent);
+    while (total_sent < msg_len) // Keep sending until the entire message
+    {                            // is in the send buffer
         int chars_sent = send(
             conn_fd,
             &msg[total_sent],
             msg_len - total_sent,
             0
         );
-        if (chars_sent < 0)
+        if (chars_sent < 0) // D'oh
         {
-            perror("otp_enc_d ERROR writing to socket");
+            perror("otp_dec_d ERROR writing to socket");
             close(conn_fd);
             return 1;
         }
-        //fprintf(stderr, "server: sent %d\n", chars_sent);
 
         total_sent += chars_sent;
     }
@@ -117,13 +124,12 @@ int send_msg(int conn_fd, const char* msg, int msg_len)
 int do_recv(int conn_fd, char* buf, int buf_size)
 {
     int chars_recved = recv(conn_fd, buf, buf_size - 1, 0);
-    if (chars_recved < 0)
+    if (chars_recved < 0) // !!!
     {
-        perror("otp_enc_d ERROR reading from socket");
+        perror("otp_dec_d ERROR reading from socket");
         close(conn_fd);
         return -1;
     }
-    //fprintf(stderr, "server recv'd: \"%s\"\n", buf);
 
     return chars_recved;
 }
@@ -137,7 +143,7 @@ int handshake(int conn_fd)
     {
         char recv_buf[RECV_CHUNK_SIZE] = {0};
         int handshake_char_count = do_recv(conn_fd, recv_buf, RECV_CHUNK_SIZE);
-        if (handshake_char_count < 0)
+        if (handshake_char_count < 0) // Catastrophe
         {
             return -1;
         }
@@ -157,7 +163,7 @@ int handshake(int conn_fd)
 
                 if (shutdown(conn_fd, SHUT_RDWR) < 0)
                 {
-                    perror("otp_enc_d ERROR shutting down socket connection");
+                    perror("otp_dec_d ERROR shutting down socket connection");
                 }
                 close(conn_fd);
                 return -1;
@@ -180,7 +186,243 @@ int handshake(int conn_fd)
         return send_res;
     }
 
-    //fprintf(stderr, "hot damn\n");
+    return 0;
+}
+
+int handle_client(int est_conn_fd)
+{
+    // Get the plaintext content from the client, storing it in
+    // dynamically allocated memory
+    char recv_buf[RECV_CHUNK_SIZE];
+
+    char* plaintext = malloc(RECV_CHUNK_SIZE * sizeof(char));
+    int plaintext_cap = RECV_CHUNK_SIZE;
+    int plaintext_len = 0;
+    plaintext[0] = '\0';
+
+    char* key = malloc(RECV_CHUNK_SIZE * sizeof(char));
+    int key_cap = RECV_CHUNK_SIZE;
+    int key_len = 0;
+    key[0] = '\0';
+
+    // Initial handshake to confirm that we are getting a connection
+    // from otp_dec
+    int handshake_res = handshake(est_conn_fd);
+    if (handshake_res < 0)
+    {
+        free(key);
+        free(plaintext);
+        return 1;
+    }
+
+    // Start receiving body of message.
+    // We use these boolean (`int`) variables as flags to indicate how "far"
+    // we've read into the client's message. Message sections are ended by the
+    // `'\n'` character
+    int recving_plaintext = 1;
+    int recving_key       = 1;
+    while (recving_plaintext)
+    {
+        memset(recv_buf, '\0', RECV_CHUNK_SIZE);
+
+        int chars_recved = do_recv(
+            est_conn_fd,
+            recv_buf,
+            RECV_CHUNK_SIZE
+        );
+        if (chars_recved < 0)
+        {
+            free(key);
+            free(plaintext);
+            return 1;
+        }
+
+        if (chars_recved == 0)
+        {
+            recving_plaintext = 0;
+        }
+
+        char* newline_loc = strchr(recv_buf, '\n');
+        int chars_to_cpy = chars_recved;
+        if (newline_loc != NULL)
+        {
+            // If we see the newline signifying the end of the plain
+            // text segment, then we want to get only the part leading
+            // up to the newline and potentially any trailing "key"
+            // data
+            chars_to_cpy = newline_loc - recv_buf;
+
+            char* snd_newline_loc = strchr(newline_loc + 1, '\n');
+
+            key_len += chars_recved - chars_to_cpy - 1;
+            strncpy(key, newline_loc + 1, key_len);
+            key[key_len] = '\0';
+
+            recving_plaintext = 0;
+            if (snd_newline_loc != NULL)
+            {
+                recving_key = 0;
+            }
+        }
+        // Allocate more space if necessary
+        while (plaintext_len + chars_to_cpy > plaintext_cap - 1)
+        {
+            plaintext_cap *= 2;
+            plaintext = realloc(
+                plaintext,
+                plaintext_cap * sizeof(char)
+            );
+        }
+
+        strncpy(
+            &plaintext[plaintext_len],
+            recv_buf,
+            chars_to_cpy
+        );
+        plaintext_len += chars_to_cpy;
+        plaintext[plaintext_len] = '\0';
+    }
+
+    // Similar logic to the above loop
+    while (recving_key)
+    {
+        memset(recv_buf, '\0', RECV_CHUNK_SIZE);
+
+        int chars_recved = do_recv(
+            est_conn_fd,
+            recv_buf,
+            RECV_CHUNK_SIZE
+        );
+        if (chars_recved < 0)
+        {
+            free(key);
+            free(plaintext);
+            return 1;
+        }
+
+        if (chars_recved == 0)
+        {
+            recving_key = 0;
+        }
+
+        char* newline_loc = strchr(recv_buf, '\n');
+        int chars_to_cpy = chars_recved;
+        if (newline_loc != NULL)
+        {
+            // If we see the newline signifying the end of the key
+            // segment, then we want to get only the part leading
+            // up to the newline and then stop reading altogether
+            chars_to_cpy = newline_loc - recv_buf;
+
+            recving_key = 0;
+        }
+        // Allocate more space if necessary
+        while (key_len + chars_to_cpy > key_cap - 1)
+        {
+            key_cap *= 2;
+            key = realloc(key, key_cap * sizeof(char));
+        }
+
+        strncpy(&key[key_len], recv_buf, chars_to_cpy);
+        key_len += chars_to_cpy;
+        key[key_len] = '\0';
+    }
+
+    // Check to make sure we have enough key
+    if (key_len < plaintext_len)
+    {
+        fprintf(
+            stderr,
+            "otp_dec_d ERROR: key is shorter than plain text portion\n"
+        );
+        free(key);
+        free(plaintext);
+        close(est_conn_fd);
+        return 1;
+    }
+
+    // Do the decoding, overwriting the `plaintext` buffer
+    decode(plaintext, plaintext_len, key);
+
+    // Send back the decoded message
+    int send_res = send_msg(est_conn_fd, plaintext, plaintext_len);
+    if (send_res != 0)
+    {
+        free(key);
+        free(plaintext);
+        return send_res;
+    }
+
+    // Child cleanup
+    free(key);
+    free(plaintext);
+    if (shutdown(est_conn_fd, SHUT_RDWR) < 0)
+    {
+        perror("otp_dec_d ERROR shutting down socket connection");
+        close(est_conn_fd);
+        return 1;
+    }
+    close(est_conn_fd);
+
+    return 0;
+}
+
+int server_loop(int socket_fd)
+{
+    while (1)
+    {
+        struct sockaddr_in client_addr;
+        socklen_t client_info_size = sizeof(client_addr);
+        int est_conn_fd = accept( // Obtain a connection
+            socket_fd,
+            (struct sockaddr*)&client_addr,
+            &client_info_size
+        );
+        if (est_conn_fd < 0)
+        {
+            perror("otp_dec_d ERROR on accept");
+            return 1;
+        }
+
+        int empty_slots = check_on_children();
+        if (empty_slots == 0)   // Immediately close socket, rejecting client
+        {                       // because we already have the max number of
+            close(est_conn_fd); // clients connected
+            continue;
+        }
+        else if (empty_slots < 0) // Something is terribly wrong
+        {
+            close(socket_fd);
+            close(est_conn_fd);
+            return 1;
+        }
+
+        pid_t spawned_pid = fork();
+        if (spawned_pid == -1)
+        {
+            perror("fork() failed!");
+            close(socket_fd);
+            close(est_conn_fd);
+            return 1;
+        }
+        else if (spawned_pid == 0) // In the child process
+        {
+            exit(handle_client(est_conn_fd));
+        }
+        else // Parent process
+        {
+            // Register child process with the global pool
+            int i;
+            for (i = 0; i < MAX_CONNECTIONS; ++i)
+            {
+                if (children[i] == 0)
+                {
+                    children[i] = spawned_pid;
+                    break;
+                }
+            }
+        }
+    }
 
     return 0;
 }
@@ -210,11 +452,9 @@ int main(int argc, char** argv)
     int socket_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (socket_fd < 0)
     {
-        perror("otp_enc_d ERROR opening socket");
+        perror("otp_dec_d ERROR opening socket");
         return 1;
     }
-
-    //fprintf(stderr, "server opened socket\n");
 
     // Enable the socket to start listening
     if (
@@ -224,266 +464,22 @@ int main(int argc, char** argv)
             sizeof(server_addr)
         ) < 0
     ) {
-        perror("otp_enc_d ERROR on binding socket");
+        perror("otp_dec_d ERROR on binding socket");
         return 1;
     }
-    //fprintf(stderr, "server bound socket\n");
     listen(socket_fd, 5);
-    //fprintf(stderr, "server is listening\n");
 
     // Start accepting connections
-    while (1)
-    {
-        struct sockaddr_in client_addr;
-        socklen_t client_info_size = sizeof(client_addr);
-        int est_conn_fd = accept(
-            socket_fd,
-            (struct sockaddr*)&client_addr,
-            &client_info_size
-        );
-        if (est_conn_fd < 0)
-        {
-            perror("otp_enc_d ERROR on accept");
-            return 1;
-        }
-        //fprintf(stderr, "server accepted conn\n");
-
-        int empty_slots = check_on_children();
-        if (empty_slots == 0)
-        {
-            //fprintf(stderr, "otp_enc_d rejected connection: already have %d connections\n", MAX_CONNECTIONS);
-            close(est_conn_fd);
-            continue;
-        }
-        else if (empty_slots < 0)
-        {
-            close(socket_fd);
-            close(est_conn_fd);
-            return 1;
-        }
-
-        pid_t spawned_pid = fork();
-        //fprintf(stderr, "server: fork!\n");
-        if (spawned_pid == -1)
-        {
-            perror("fork() failed!");
-            close(socket_fd);
-            close(est_conn_fd);
-            return 1;
-        }
-        else if (spawned_pid == 0) // In the child process
-        {
-            //fprintf(stderr, "server child process reporting in\n");
-            // Get the plaintext content from the client, storing it in
-            // dynamically allocated memory
-            char recv_buf[RECV_CHUNK_SIZE];
-
-            char* plaintext = malloc(RECV_CHUNK_SIZE * sizeof(char));
-            int plaintext_cap = RECV_CHUNK_SIZE;
-            int plaintext_len = 0;
-            plaintext[0] = '\0';
-
-            char* key = malloc(RECV_CHUNK_SIZE * sizeof(char));
-            int key_cap = RECV_CHUNK_SIZE;
-            int key_len = 0;
-            key[0] = '\0';
-
-            //fprintf(stderr, "server malloc'd\n");
-
-            // Initial handshake to confirm that we are getting a connection
-            // from otp_enc
-            int handshake_res = handshake(est_conn_fd);
-            if (handshake_res < 0)
-            {
-                free(key);
-                free(plaintext);
-                return 1;
-            }
-
-            // Start receiving body of message
-            int recving_plaintext = 1;
-            int recving_key       = 1;
-            while (recving_plaintext)
-            {
-                memset(recv_buf, '\0', RECV_CHUNK_SIZE);
-
-                int chars_recved = do_recv(
-                    est_conn_fd,
-                    recv_buf,
-                    RECV_CHUNK_SIZE
-                );
-                if (chars_recved < 0)
-                {
-                    free(key);
-                    free(plaintext);
-                    return 1;
-                }
-
-                if (chars_recved == 0)
-                {
-                    recving_plaintext = 0;
-                }
-
-                char* newline_loc = strchr(recv_buf, '\n');
-                int chars_to_cpy = chars_recved;
-                if (newline_loc != NULL)
-                {
-                    //fprintf(stderr, "server: newline_loc != NULL\n");
-                    // If we see the newline signifying the end of the plain
-                    // text segment, then we want to get only the part leading
-                    // up to the newline and potentially any trailing "key"
-                    // data
-                    chars_to_cpy = newline_loc - recv_buf;
-
-                    char* snd_newline_loc = strchr(newline_loc + 1, '\n');
-
-                    key_len += chars_recved - chars_to_cpy - 1;
-                    strncpy(key, newline_loc + 1, key_len);
-                    key[key_len] = '\0';
-
-                    recving_plaintext = 0;
-                    if (snd_newline_loc != NULL)
-                    {
-                        recving_key = 0;
-                    }
-                }
-                // Allocate more space if necessary
-                while (plaintext_len + chars_to_cpy > plaintext_cap - 1)
-                {
-                    //fprintf(stderr, "server realloc'ing\n");
-                    plaintext_cap *= 2;
-                    plaintext = realloc(
-                        plaintext,
-                        plaintext_cap * sizeof(char)
-                    );
-                }
-
-                strncpy(
-                    &plaintext[plaintext_len],
-                    recv_buf,
-                    chars_to_cpy
-                );
-                plaintext_len += chars_to_cpy;
-                plaintext[plaintext_len] = '\0';
-            }
-
-            while (recving_key)
-            {
-                memset(recv_buf, '\0', RECV_CHUNK_SIZE);
-
-                int chars_recved = do_recv(
-                    est_conn_fd,
-                    recv_buf,
-                    RECV_CHUNK_SIZE
-                );
-                if (chars_recved < 0)
-                {
-                    free(key);
-                    free(plaintext);
-                    return 1;
-                }
-
-                if (chars_recved == 0)
-                {
-                    recving_key = 0;
-                }
-
-                char* newline_loc = strchr(recv_buf, '\n');
-                int chars_to_cpy = chars_recved;
-                if (newline_loc != NULL)
-                {
-                    //fprintf(stderr, "server: newline_loc != NULL\n");
-
-                    // If we see the newline signifying the end of the key
-                    // segment, then we want to get only the part leading
-                    // up to the newline and then stop reading altogether
-                    chars_to_cpy = newline_loc - recv_buf;
-
-                    recving_key = 0;
-                }
-                // Allocate more space if necessary
-                while (key_len + chars_to_cpy > key_cap - 1)
-                {
-                    //fprintf(stderr, "server realloc'ing\n");
-                    key_cap *= 2;
-                    key = realloc(key, key_cap * sizeof(char));
-                }
-
-                strncpy(&key[key_len], recv_buf, chars_to_cpy);
-                key_len += chars_to_cpy;
-                key[key_len] = '\0';
-            }
-
-            // Check to make sure we have enough key
-            if (key_len < plaintext_len)
-            {
-                fprintf(
-                    stderr,
-                    "otp_enc_d ERROR: key is shorter than plain text portion\n"
-                );
-                free(key);
-                free(plaintext);
-                close(est_conn_fd);
-                return 1;
-            }
-
-            //fprintf(stderr, "server: encoding? (plaintext_len == %d)\n", plaintext_len);
-            // Do the encoding, overwriting the `plaintext` buffer
-            encode(plaintext, plaintext_len, key);
-            //fprintf(stderr, "server: encoded!\n");
-
-            // Send back the encoded message
-            int send_res = send_msg(est_conn_fd, plaintext, plaintext_len);
-            if (send_res != 0)
-            {
-                free(key);
-                free(plaintext);
-                return send_res;
-            }
-
-            // Child cleanup
-            //fprintf(stderr, "server: child cleanup\n");
-            free(key);
-            free(plaintext);
-            //fprintf(stderr, "server: free'd\n");
-            if (shutdown(est_conn_fd, SHUT_RDWR) < 0)
-            {
-                perror("otp_enc_d ERROR shutting down socket connection");
-                close(est_conn_fd);
-                return 1;
-            }
-            //fprintf(stderr, "server: child shutdown\n");
-            close(est_conn_fd);
-            //fprintf(stderr, "server: child closed\n");
-
-            return 0;
-        }
-        else // Parent process
-        {
-            int i;
-            for (i = 0; i < MAX_CONNECTIONS; ++i)
-            {
-                if (children[i] == 0)
-                {
-                    children[i] = spawned_pid;
-                    break;
-                }
-            }
-        }
-    }
+    int ret = server_loop(socket_fd);
 
     // Cleanup
-    //fprintf(stderr, "server: main cleanup\n");
     kill_children();
-    //fprintf(stderr, "server: children killed\n");
     if (shutdown(socket_fd, SHUT_RDWR) < 0)
     {
-        perror("otp_enc_d ERROR shutting down main socket connection");
-        close(socket_fd);
-        return 1;
+        perror("otp_dec_d ERROR shutting down main socket connection");
+        ret = 1;
     }
-    //fprintf(stderr, "server: main shutdown\n");
     close(socket_fd);
 
-    return 0;
+    return ret;
 }
